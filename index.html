@@ -225,6 +225,10 @@ body { font-family: var(--font-sans); background: var(--cream); color: var(--ink
 .wish-card-remove { display: block; width: 100%; padding: 10px; background: none; border: none; border-top: 1px solid var(--cream-dark); color: var(--wish); font-size: 13px; font-weight: 500; cursor: pointer; text-align: center; transition: background .15s; }
 .wish-card-remove:hover { background: var(--wish-light); }
 
+/* ── 그룹 핀 팝업 ── */
+.group-popup { animation: fadeIn .15s ease; }
+@keyframes fadeIn { from { opacity:0; transform:translateY(calc(-50% - 6px)); } to { opacity:1; transform:translateY(-50%); } }
+
 /* ── 공통 ── */
 .hidden { display: none !important; }
 .center-msg { text-align: center; padding: 60px 20px; color: var(--ink-soft); display: flex; flex-direction: column; align-items: center; gap: 14px; font-size: 15px; line-height: 1.7; }
@@ -545,33 +549,126 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /* ── 지도 핀 렌더링 ── */
-  /* 지도에 표시 기준: 위시리스트에 있거나 activeOnMap에 있는 부스만 */
+  /* 지도에 표시 기준: 위시리스트에 있거나 activeOnMap에 있는 부스만
+     같은 pinX/pinY에 여러 부스가 있으면 그룹 핀으로 묶어서 표시 */
   function renderPins() {
     $mapPins.innerHTML = '';
-    const user = Storage.getCurrentUser();
+    const user    = Storage.getCurrentUser();
     const wishIds = new Set(Storage.getWishlist(user));
 
-    allBooths.forEach(booth => {
-      const isWish   = wishIds.has(booth.id);
-      const isActive = activeOnMap.has(booth.id);
-      if (!isWish && !isActive) return; // 둘 다 아니면 핀 안 그림
-      if (!booth.pinX && !booth.pinY) return;
+    // 표시할 부스만 필터링
+    const visible = allBooths.filter(b => {
+      if (!b.pinX && !b.pinY) return false;
+      return wishIds.has(b.id) || activeOnMap.has(b.id);
+    });
+
+    // 같은 좌표끼리 그룹핑
+    const groups = {};
+    visible.forEach(b => {
+      const key = `${b.pinX}_${b.pinY}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(b);
+    });
+
+    Object.entries(groups).forEach(([key, booths]) => {
+      const [px, py] = key.split('_');
+      // 그룹 내에 위시리스트 부스가 하나라도 있으면 빨간 핀
+      const hasWish = booths.some(b => wishIds.has(b.id));
+      const count   = booths.length;
 
       const pin = document.createElement('div');
-      pin.className = 'booth-pin' + (isWish ? ' wish' : '');
-      pin.style.left = booth.pinX + '%';
-      pin.style.top  = booth.pinY + '%';
-      pin.dataset.id = booth.id;
-      pin.title = `${booth.number} ${booth.name}`;
+      pin.className = 'booth-pin' + (hasWish ? ' wish' : '');
+      pin.style.left = px + '%';
+      pin.style.top  = py + '%';
 
-      const label = document.createElement('div');
-      label.className = 'booth-pin-label';
-      label.textContent = booth.number;
-      pin.appendChild(label);
+      // 여러 부스면 숫자 뱃지, 하나면 부스번호 표시
+      if (count > 1) {
+        pin.style.width  = '28px';
+        pin.style.height = '28px';
+        pin.title = booths.map(b => `${b.number} ${b.name}`).join('\n');
 
-      pin.addEventListener('click', () => openBoothModal(booth));
+        const label = document.createElement('div');
+        label.className = 'booth-pin-label';
+        label.style.fontSize = '9px';
+        label.textContent = count;
+        pin.appendChild(label);
+
+        // 클릭 시 그룹 팝업 표시
+        pin.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showGroupPopup(booths, px, py, pin);
+        });
+      } else {
+        pin.title = `${booths[0].number} ${booths[0].name}`;
+        const label = document.createElement('div');
+        label.className = 'booth-pin-label';
+        label.textContent = booths[0].number;
+        pin.appendChild(label);
+        pin.addEventListener('click', () => openBoothModal(booths[0]));
+      }
+
       $mapPins.appendChild(pin);
     });
+  }
+
+  /* 같은 위치 그룹 팝업 */
+  function showGroupPopup(booths, px, py, pinEl) {
+    // 기존 팝업 제거
+    document.querySelectorAll('.group-popup').forEach(el => el.remove());
+
+    const popup = document.createElement('div');
+    popup.className = 'group-popup';
+    popup.style.cssText = `
+      position:absolute;
+      left:${parseFloat(px)+2}%;
+      top:${parseFloat(py)}%;
+      transform:translateY(-50%);
+      background:#fff;
+      border:1.5px solid #e0dbd0;
+      border-radius:12px;
+      box-shadow:0 8px 24px rgba(0,0,0,.18);
+      z-index:50;
+      min-width:180px;
+      padding:8px 0;
+      pointer-events:all;
+    `;
+
+    const user    = Storage.getCurrentUser();
+    const wishIds = new Set(Storage.getWishlist(user));
+
+    // 제목
+    const title = document.createElement('div');
+    title.style.cssText = 'padding:6px 14px 8px;font-size:11px;font-weight:700;color:#999;letter-spacing:.08em;border-bottom:1px solid #f0ece0;';
+    title.textContent = `📍 ${booths.length}개 부스`;
+    popup.appendChild(title);
+
+    booths.forEach(booth => {
+      const row = document.createElement('div');
+      const isWish = wishIds.has(booth.id);
+      row.style.cssText = 'padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background .12s;';
+      row.innerHTML = `
+        <span style="background:${isWish?'#e8523a':'#2e3192'};color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;flex-shrink:0;">${booth.number}</span>
+        <span style="font-size:13px;color:#1a1a2e;flex:1;">${booth.name}</span>
+        ${isWish ? '<span style="font-size:12px;">⭐</span>' : ''}
+      `;
+      row.addEventListener('mouseenter', () => row.style.background = '#faf8f2');
+      row.addEventListener('mouseleave', () => row.style.background = '');
+      row.addEventListener('click', () => {
+        popup.remove();
+        openBoothModal(booth);
+      });
+      popup.appendChild(row);
+    });
+
+    $mapPins.appendChild(popup);
+
+    // 팝업 외부 클릭 시 닫기
+    setTimeout(() => {
+      document.addEventListener('click', function closePopup() {
+        popup.remove();
+        document.removeEventListener('click', closePopup);
+      });
+    }, 0);
   }
 
   /* ── 부스 리스트 렌더링 ── */
